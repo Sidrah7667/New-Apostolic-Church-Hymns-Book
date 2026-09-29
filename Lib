@@ -1,0 +1,674 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+void main() {
+  runApp(const ChristianGeetApp());
+}
+
+class Geet {
+  String title;
+  String lyrics;
+  String category;
+  String videoUrl;
+  bool favorite;
+
+  Geet({
+    required this.title,
+    required this.lyrics,
+    required this.category,
+    required this.videoUrl,
+    this.favorite = false,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'title': title,
+      'lyrics': lyrics,
+      'category': category,
+      'videoUrl': videoUrl,
+      'favorite': favorite,
+    };
+  }
+
+  factory Geet.fromJson(Map<String, dynamic> json) {
+    return Geet(
+      title: json['title']?.toString() ?? '',
+      lyrics: json['lyrics']?.toString() ?? '',
+      category: json['category']?.toString() ?? 'Christian Geet',
+      videoUrl: json['videoUrl']?.toString() ?? '',
+      favorite: json['favorite'] == true,
+    );
+  }
+}
+
+class Store {
+  static const String key = 'christian_geets';
+
+  static Future<List<Geet>> load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(key);
+
+      if (raw == null || raw.isEmpty) {
+        return [];
+      }
+
+      final decoded = jsonDecode(raw);
+
+      if (decoded is! List) {
+        return [];
+      }
+
+      return decoded
+          .whereType<Map>()
+          .map((item) => Geet.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  static Future<void> save(List<Geet> geets) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      final data = geets.map((g) => g.toJson()).toList();
+
+      await prefs.setString(key, jsonEncode(data));
+    } catch (e) {
+      // Ignore storage errors so the app does not crash.
+    }
+  }
+}
+
+class ChristianGeetApp extends StatelessWidget {
+  const ChristianGeetApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Christian Geet & Zaboor',
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: Colors.indigo,
+      ),
+      home: const HomePage(),
+    );
+  }
+}
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  List<Geet> geets = [];
+  bool favoritesOnly = false;
+  String search = '';
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    loadGeets();
+  }
+
+  Future<void> loadGeets() async {
+    final data = await Store.load();
+
+    if (!mounted) return;
+
+    setState(() {
+      geets = data;
+      loading = false;
+    });
+  }
+
+  List<Geet> get filteredGeets {
+    return geets.where((g) {
+      final matchesFavorite =
+          !favoritesOnly || g.favorite;
+
+      final text =
+          '${g.title} ${g.category} ${g.lyrics}'.toLowerCase();
+
+      final matchesSearch =
+          text.contains(search.toLowerCase());
+
+      return matchesFavorite && matchesSearch;
+    }).toList();
+  }
+
+  Future<void> addOrEdit([Geet? old]) async {
+    final result = await Navigator.push<Geet>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditPage(old: old),
+      ),
+    );
+
+    if (result == null) return;
+
+    setState(() {
+      if (old == null) {
+        geets.add(result);
+      } else {
+        final index = geets.indexOf(old);
+
+        if (index >= 0) {
+          geets[index] = result;
+        }
+      }
+    });
+
+    await Store.save(geets);
+  }
+
+  Future<void> deleteGeet(Geet geet) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) {
+        return AlertDialog(
+          title: const Text('Delete / حذف'),
+          content: Text(
+            'کیا آپ "${geet.title}" حذف کرنا چاہتے ہیں؟',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm == true) {
+      setState(() {
+        geets.remove(geet);
+      });
+
+      await Store.save(geets);
+    }
+  }
+
+  Future<void> searchGeets() async {
+    final controller =
+        TextEditingController(text: search);
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (_) {
+        return AlertDialog(
+          title: const Text('Search / تلاش'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'Geet ka naam likhein',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.pop(context, controller.text),
+              child: const Text('Search'),
+            ),
+          ],
+        );
+      },
+    );
+
+    controller.dispose();
+
+    if (result != null) {
+      setState(() {
+        search = result;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = filteredGeets;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          '✝️ Christian Geet & Zaboor',
+        ),
+        actions: [
+          IconButton(
+            onPressed: searchGeets,
+            icon: const Icon(Icons.search),
+          ),
+        ],
+      ),
+
+      body: loading
+          ? const Center(
+              child: CircularProgressIndicator(),
+            )
+          : list.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.music_note,
+                          size: 70,
+                        ),
+                        const SizedBox(height: 15),
+                        const Text(
+                          'ابھی کوئی Geet موجود نہیں ہے',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'نیچے + بٹن دبا کر نیا Geet شامل کریں',
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 20),
+                        FilledButton.icon(
+                          onPressed: () => addOrEdit(),
+                          icon: const Icon(Icons.add),
+                          label: const Text('Naya Geet'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(8),
+                  itemCount: list.length,
+                  itemBuilder: (context, index) {
+                    final geet = list[index];
+
+                    return Card(
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          child: Icon(
+                            geet.category == 'Zaboor'
+                                ? Icons.menu_book
+                                : Icons.music_note,
+                          ),
+                        ),
+                        title: Text(
+                          geet.title,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        subtitle: Text(
+                          geet.category,
+                        ),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => GeetPage(
+                                geet: geet,
+                                onChanged: () {
+                                  setState(() {});
+                                  Store.save(geets);
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                        trailing: PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'favorite') {
+                              setState(() {
+                                geet.favorite =
+                                    !geet.favorite;
+                              });
+                              Store.save(geets);
+                            }
+
+                            if (value == 'edit') {
+                              addOrEdit(geet);
+                            }
+
+                            if (value == 'delete') {
+                              deleteGeet(geet);
+                            }
+                          },
+                          itemBuilder: (_) => [
+                            PopupMenuItem(
+                              value: 'favorite',
+                              child: Text(
+                                geet.favorite
+                                    ? 'Remove Favorite'
+                                    : 'Favorite / پسندیدہ',
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'edit',
+                              child: Text('Edit / ترمیم'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Text('Delete / حذف'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => addOrEdit(),
+        icon: const Icon(Icons.add),
+        label: const Text('Naya Geet'),
+      ),
+
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: favoritesOnly ? 1 : 0,
+        onDestinationSelected: (index) {
+          setState(() {
+            favoritesOnly = index == 1;
+          });
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.music_note),
+            label: 'Christian Geet',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.favorite),
+            label: 'Favorites',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class EditPage extends StatefulWidget {
+  final Geet? old;
+
+  const EditPage({
+    super.key,
+    this.old,
+  });
+
+  @override
+  State<EditPage> createState() => _EditPageState();
+}
+
+class _EditPageState extends State<EditPage> {
+  late TextEditingController titleController;
+  late TextEditingController lyricsController;
+  late TextEditingController videoController;
+
+  String category = 'Christian Geet';
+
+  @override
+  void initState() {
+    super.initState();
+
+    final geet = widget.old;
+
+    titleController =
+        TextEditingController(text: geet?.title ?? '');
+
+    lyricsController =
+        TextEditingController(text: geet?.lyrics ?? '');
+
+    videoController =
+        TextEditingController(text: geet?.videoUrl ?? '');
+
+    category =
+        geet?.category ?? 'Christian Geet';
+  }
+
+  @override
+  void dispose() {
+    titleController.dispose();
+    lyricsController.dispose();
+    videoController.dispose();
+    super.dispose();
+  }
+
+  void saveGeet() {
+    final title = titleController.text.trim();
+
+    if (title.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Geet ka naam likhein'),
+        ),
+      );
+      return;
+    }
+
+    Navigator.pop(
+      context,
+      Geet(
+        title: title,
+        lyrics: lyricsController.text,
+        category: category,
+        videoUrl: videoController.text.trim(),
+        favorite: widget.old?.favorite ?? false,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          widget.old == null
+              ? 'Naya Geet / نیا Geet'
+              : 'Edit / ترمیم',
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          TextField(
+            controller: titleController,
+            decoration: const InputDecoration(
+              labelText: 'Geet ka Naam / گیت کا نام',
+              border: OutlineInputBorder(),
+            ),
+          ),
+
+          const SizedBox(height: 15),
+
+          DropdownButtonFormField<String>(
+            value: category,
+            decoration: const InputDecoration(
+              labelText: 'Category / قسم',
+              border: OutlineInputBorder(),
+            ),
+            items: const [
+              'Christian Geet',
+              'Zaboor',
+              'Worship',
+              'Christmas',
+              'Easter',
+              'Sunday School',
+            ].map((item) {
+              return DropdownMenuItem(
+                value: item,
+                child: Text(item),
+              );
+            }).toList(),
+            onChanged: (value) {
+              if (value != null) {
+                setState(() {
+                  category = value;
+                });
+              }
+            },
+          ),
+
+          const SizedBox(height: 15),
+
+          TextField(
+            controller: lyricsController,
+            minLines: 10,
+            maxLines: 20,
+            decoration: const InputDecoration(
+              labelText: 'Geet ke Bol / گیت کے بول',
+              alignLabelWithHint: true,
+              border: OutlineInputBorder(),
+            ),
+          ),
+
+          const SizedBox(height: 15),
+
+          TextField(
+            controller: videoController,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(
+              labelText: 'YouTube / Video Link',
+              border: OutlineInputBorder(),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          FilledButton.icon(
+            onPressed: saveGeet,
+            icon: const Icon(Icons.save),
+            label: const Text('Save / محفوظ کریں'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class GeetPage extends StatelessWidget {
+  final Geet geet;
+  final VoidCallback onChanged;
+
+  const GeetPage({
+    super.key,
+    required this.geet,
+    required this.onChanged,
+  });
+
+  Future<void> openVideo(BuildContext context) async {
+    if (geet.videoUrl.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Video link محفوظ نہیں ہے'),
+        ),
+      );
+      return;
+    }
+
+    final uri = Uri.tryParse(geet.videoUrl);
+
+    if (uri != null && await canLaunchUrl(uri)) {
+      await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+    } else {
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Video link درست نہیں ہے'),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(
+            Icons.play_circle_fill,
+          ),
+          onPressed: () => openVideo(context),
+        ),
+        title: Text(geet.title),
+        actions: [
+          IconButton(
+            icon: Icon(
+              geet.favorite
+                  ? Icons.favorite
+                  : Icons.favorite_border,
+            ),
+            onPressed: () {
+              geet.favorite = !geet.favorite;
+              onChanged();
+            },
+          ),
+        ],
+      ),
+
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: [
+            Chip(
+              label: Text(geet.category),
+            ),
+
+            const SizedBox(height: 20),
+
+            Text(
+              geet.lyrics.isEmpty
+                  ? 'ابھی گیت کے بول شامل نہیں کیے گئے۔'
+                  : geet.lyrics,
+              style: const TextStyle(
+                fontSize: 20,
+                height: 1.7,
+              ),
+            ),
+
+            const SizedBox(height: 25),
+
+            if (geet.videoUrl.isNotEmpty)
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => openVideo(context),
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text(
+                    'Geet ki Video چلائیں',
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
